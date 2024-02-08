@@ -1,7 +1,6 @@
 from flask import request, Blueprint, jsonify
 from src import db
 from src.models import Contact
-from sqlalchemy import or_,and_
 
 api_blueprint = Blueprint('api', __name__)
 
@@ -15,14 +14,15 @@ def identify_users():
     email = data.get("email")
     phoneNumber = data.get("phoneNumber")
 
+    # Handle bad request
+    if email == None and phoneNumber == None:
+        return jsonify({"Message":"Enter email or Password"}), 400
+
     # Get Primary Contact corresponding to request
     primary_contact = None
     primary_contact = Contact.query.filter(
-        and_(
-            or_(
-                Contact.email == email, Contact.phoneNumber == phoneNumber
-            ),
-        Contact.linkPrecedence=="primary")
+            (Contact.email == email) | (Contact.phoneNumber == phoneNumber),
+            Contact.linkPrecedence == "primary"
         ).order_by(Contact.createdAt).first()
     
     # Get secondary contact corresponding to request (strictly) -> Handle Null Inputs
@@ -34,11 +34,10 @@ def identify_users():
         matching_contact = Contact.query.filter_by(email = email, phoneNumber = phoneNumber, linkPrecedence='secondary').first()
 
     # Get all contacts corresponding to request (loosely) and remove our primary card from it
-    existing_contacts = Contact.query.filter(or_(Contact.email == email, Contact.phoneNumber == phoneNumber)).all()
-    for item in existing_contacts:
-        if primary_contact and item.id == primary_contact.id:
-            primary_contact = item
-            existing_contacts.remove(item)
+    existing_contacts = Contact.query.filter(
+        (Contact.email == email) | (Contact.phoneNumber == phoneNumber)
+    ).all()
+    existing_contacts = [item for item in existing_contacts if primary_contact and item.id != primary_contact.id]
 
     # If primary card is present
     if primary_contact:
@@ -99,27 +98,17 @@ def identify_users():
 
 
 def format_result(primary_contact):
-    emails = [primary_contact.email]
-    phoneNumbers = [primary_contact.phoneNumber]
+    secondary_contacts = Contact.query.filter_by(linkedId=primary_contact.id).all()
+    emails = {primary_contact.email} | {contact.email for contact in secondary_contacts}
+    phoneNumbers = {primary_contact.phoneNumber} | {contact.phoneNumber for contact in secondary_contacts}
 
-    # Get all linked cards (secondary)
-    secondary_contact_ids = []
-    secondary_contacts = Contact.query.filter_by(linkedId = primary_contact.id)
-    if secondary_contacts:
-        for secondary_contact in secondary_contacts:
-            secondary_contact_ids.append(secondary_contact.id)
-
-            if secondary_contact.email not in emails:
-                emails.append(secondary_contact.email)
-
-            if secondary_contact.phoneNumber not in phoneNumbers:
-                phoneNumbers.append(secondary_contact.phoneNumber)
+    secondary_contact_ids = [contact.id for contact in secondary_contacts]
 
     return {
         "contact": {
             "primaryContactId": primary_contact.id,
-            "emails": emails,
-            "phoneNumbers": phoneNumbers,
+            "emails": list(emails),
+            "phoneNumbers": list(phoneNumbers),
             "secondaryContactIds": secondary_contact_ids,
         }
     }
